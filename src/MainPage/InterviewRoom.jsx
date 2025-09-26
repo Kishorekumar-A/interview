@@ -18,11 +18,61 @@ function InterviewRoom({ room, onLeave }) {
   const [connectionStatus, setConnectionStatus] = useState("disconnected");
   const [interviewStatus, setInterviewStatus] = useState("not_started");
   const [mediaStream, setMediaStream] = useState(null);
+  const [participantStream, setParticipantStream] = useState(null);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isMicOn, setIsMicOn] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [activeParticipants, setActiveParticipants] = useState(0);
   const videoRef = useRef(null);
+  const participantVideoRef = useRef(null);
   const wsRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const dataChannelRef = useRef(null);
+
+  // Simple WebRTC implementation for demo
+  const initializeWebRTC = async () => {
+    try {
+      // Create RTCPeerConnection
+      const configuration = {
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      };
+      peerConnectionRef.current = new RTCPeerConnection(configuration);
+
+      // Add local stream to connection
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => {
+          peerConnectionRef.current.addTrack(track, mediaStream);
+        });
+      }
+
+      // Handle incoming tracks (participant video)
+      peerConnectionRef.current.ontrack = (event) => {
+        console.log('Received remote stream');
+        setParticipantStream(event.streams[0]);
+        if (participantVideoRef.current) {
+          participantVideoRef.current.srcObject = event.streams[0];
+        }
+        setActiveParticipants(1);
+      };
+
+      // Handle ICE candidates
+      peerConnectionRef.current.onicecandidate = (event) => {
+        if (event.candidate) {
+          // Send ICE candidate to participant (simulated)
+          console.log('ICE candidate generated');
+        }
+      };
+
+      // Create data channel for messaging
+      dataChannelRef.current = peerConnectionRef.current.createDataChannel('chat');
+      dataChannelRef.current.onmessage = (event) => {
+        console.log('Message from participant:', event.data);
+      };
+
+    } catch (error) {
+      console.error('WebRTC initialization error:', error);
+    }
+  };
 
   const startCamera = async () => {
     try {
@@ -40,6 +90,17 @@ function InterviewRoom({ room, onLeave }) {
       }
       setIsCameraOn(true);
       setIsMicOn(true);
+
+      // Initialize WebRTC after getting local stream
+      await initializeWebRTC();
+
+      // Save interviewer stream status to localStorage
+      updateRoomData({
+        interviewerActive: true,
+        interviewerStream: true,
+        lastUpdated: new Date().toISOString()
+      });
+
     } catch (err) {
       console.error("Error accessing media devices:", err);
       alert("Could not access camera. Please check permissions.");
@@ -55,6 +116,107 @@ function InterviewRoom({ room, onLeave }) {
       }
       setIsCameraOn(false);
       setIsMicOn(false);
+
+      // Close WebRTC connection
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+        peerConnectionRef.current = null;
+      }
+
+      // Update room data
+      updateRoomData({
+        interviewerActive: false,
+        interviewerStream: false,
+        lastUpdated: new Date().toISOString()
+      });
+    }
+  };
+
+  const getRoomData = () => {
+    const rooms = JSON.parse(localStorage.getItem('interviewRooms') || '[]');
+    return rooms.find(r => r.id === room.id);
+  };
+
+  const updateRoomData = (updates) => {
+    const rooms = JSON.parse(localStorage.getItem('interviewRooms') || '[]');
+    const updatedRooms = rooms.map(r => {
+      if (r.id === room.id) {
+        return { ...r, ...updates };
+      }
+      return r;
+    });
+    localStorage.setItem('interviewRooms', JSON.stringify(updatedRooms));
+  };
+
+  const checkParticipantStatus = () => {
+    const roomData = getRoomData();
+    if (roomData) {
+      const participantCount = roomData.participants?.filter(p => p.isActive && p.streamActive).length || 0;
+      setActiveParticipants(participantCount);
+
+      // Simulate participant stream for demo (in real app, this would be actual WebRTC)
+      if (participantCount > 0 && !participantStream && participantVideoRef.current) {
+        // Create a simulated participant stream for demo purposes
+        simulateParticipantStream();
+      } else if (participantCount === 0 && participantStream) {
+        // Clear participant stream if no participants
+        setParticipantStream(null);
+        if (participantVideoRef.current) {
+          participantVideoRef.current.srcObject = null;
+        }
+      }
+    }
+  };
+
+  const simulateParticipantStream = async () => {
+    try {
+      // For demo purposes, create a test video stream
+      // In a real application, this would be the actual participant's stream via WebRTC
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      canvas.width = 640;
+      canvas.height = 480;
+      
+      // Create a simple animation for the demo stream
+      let angle = 0;
+      const drawFrame = () => {
+        context.fillStyle = '#2c3e50';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        
+        context.fillStyle = '#3498db';
+        context.font = '48px Arial';
+        context.textAlign = 'center';
+        context.fillText('Participant', canvas.width/2, canvas.height/2 - 24);
+        context.font = '24px Arial';
+        context.fillText('Live Video', canvas.width/2, canvas.height/2 + 24);
+        
+        // Draw a rotating circle for animation
+        context.beginPath();
+        context.arc(
+          canvas.width/2 + Math.cos(angle) * 100,
+          canvas.height/2 + Math.sin(angle) * 100,
+          20, 0, 2 * Math.PI
+        );
+        context.fillStyle = '#e74c3c';
+        context.fill();
+        
+        angle += 0.1;
+      };
+
+      // Create stream from canvas
+      const stream = canvas.captureStream(25);
+      const drawInterval = setInterval(drawFrame, 40);
+
+      setParticipantStream(stream);
+      if (participantVideoRef.current) {
+        participantVideoRef.current.srcObject = stream;
+      }
+
+      // Store interval ID for cleanup
+      participantVideoRef.current._drawInterval = drawInterval;
+
+    } catch (error) {
+      console.error('Error simulating participant stream:', error);
     }
   };
 
@@ -111,6 +273,7 @@ function InterviewRoom({ room, onLeave }) {
   const startInterview = async () => {
     try {
       await startCamera();
+      
       const response = await fetch("http://localhost:8000/start_interview", {
         method: "POST",
       });
@@ -129,6 +292,7 @@ function InterviewRoom({ room, onLeave }) {
   const stopInterview = async () => {
     try {
       stopCamera();
+      
       const response = await fetch("http://localhost:8000/stop_interview", {
         method: "POST",
       });
@@ -196,13 +360,31 @@ function InterviewRoom({ room, onLeave }) {
   };
 
   useEffect(() => {
+    // Set up interval to check for participant status
+    const interval = setInterval(checkParticipantStatus, 2000);
+    
     return () => {
+      clearInterval(interval);
       if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
       }
       if (wsRef.current) {
         wsRef.current.close();
       }
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+      }
+      // Clean up canvas animation if exists
+      if (participantVideoRef.current?._drawInterval) {
+        clearInterval(participantVideoRef.current._drawInterval);
+      }
+
+      // Update room status when leaving
+      updateRoomData({
+        interviewerActive: false,
+        interviewerStream: false,
+        lastUpdated: new Date().toISOString()
+      });
     };
   }, []);
 
@@ -211,7 +393,7 @@ function InterviewRoom({ room, onLeave }) {
       {/* Top Header */}
       <div className="room-header">
         <div className="header-left">
-          <h2>AI Interview Room</h2>
+          <h2>AI Interview Room - Interviewer</h2>
           <span className={`room-status ${room.isJoining ? 'joined' : 'hosting'}`}>
             {room.isJoining ? 'JOINED' : 'HOSTING'}
           </span>
@@ -231,35 +413,69 @@ function InterviewRoom({ room, onLeave }) {
 
       {/* Main Content */}
       <div className="room-content">
-        {/* Left Side - Video (75%) */}
+        {/* Video Section (75%) */}
         <div className="video-section">
           {/* Video Container */}
           <div className="video-container">
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
-              muted
-              className={`video-element ${isCameraOn ? 'active' : 'inactive'}`}
-            />
-            
-            {!isCameraOn && (
-              <div className="camera-off-placeholder">
-                <div className="camera-icon">📹</div>
-                Camera is off. Start interview to begin.
+            {/* Video Grid - Two videos side by side */}
+            <div className="video-grid">
+              {/* Interviewer Video */}
+              <div className="video-tile interviewer-tile">
+                <video 
+                  ref={videoRef} 
+                  autoPlay 
+                  playsInline 
+                  muted
+                  className={`video-element mirror-effect ${isCameraOn ? 'active' : 'inactive'}`}
+                />
+                <div className="video-info">
+                  <div className="participant-name">You (Interviewer)</div>
+                  <div className="video-status">
+                    {isMicOn ? '🎤' : '🔇'} {isCameraOn ? '📹' : '📷 Off'}
+                  </div>
+                </div>
+                {!isCameraOn && (
+                  <div className="video-overlay">
+                    <div className="camera-icon">📹</div>
+                    <div>Your camera is off</div>
+                  </div>
+                )}
               </div>
-            )}
 
-            {/* Start Interview Button - Left Side */}
+              {/* Participant Video */}
+              <div className={`video-tile participant-tile ${activeParticipants > 0 ? 'active' : 'inactive'}`}>
+                <video 
+                  ref={participantVideoRef} 
+                  autoPlay 
+                  playsInline 
+                  className="video-element"
+                />
+                <div className="video-info">
+                  <div className="participant-name">
+                    Participant {activeParticipants > 0 ? '(Live)' : '(Offline)'}
+                  </div>
+                  <div className="video-status">
+                    {activeParticipants > 0 ? '🔊 📹 Live' : 'Waiting for participant...'}
+                  </div>
+                </div>
+                {activeParticipants === 0 && (
+                  <div className="video-overlay">
+                    <div className="camera-icon">👤</div>
+                    <div>Waiting for participant</div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Start Interview Button */}
             <div className="start-interview-container">
               <button 
                 onClick={interviewStatus === "active" ? stopInterview : startInterview}
                 disabled={interviewStatus === "active" && !mediaStream}
                 className={`start-interview-button ${interviewStatus === "active" ? 'stop' : 'start'}`}
-                title={interviewStatus === "active" ? "Stop Interview" : "Start Interview"}
               >
                 <span className="start-button-icon">{interviewStatus === "active" ? '⏹️' : '▶️'}</span>
-                <span className="start-button-text">{interviewStatus === "active" ? "Stop Interview" : "Start Interview"}</span>
+                <span className="start-button-text">{interviewStatus === "active" ? "End Interview" : "Start Interview"}</span>
               </button>
             </div>
 
@@ -271,9 +487,8 @@ function InterviewRoom({ room, onLeave }) {
                 title={isMicOn ? "Mute Microphone" : "Unmute Microphone"}
               >
                 <span className="control-icon">
-                  {isMicOn ? "🎤" : "🎤"}
+                  {isMicOn ? "🎤" : "🔇"}
                 </span>
-                <span className="control-text">{isMicOn ? "Mute" : "Unmute"}</span>
               </button>
               
               <button 
@@ -284,7 +499,6 @@ function InterviewRoom({ room, onLeave }) {
                 <span className="control-icon">
                   {isCameraOn ? "📹" : "📷"}
                 </span>
-                <span className="control-text">{isCameraOn ? "Stop Video" : "Start Video"}</span>
               </button>
               
               <button 
@@ -293,7 +507,6 @@ function InterviewRoom({ room, onLeave }) {
                 title={isScreenSharing ? "Stop Screen Share" : "Share Screen"}
               >
                 <span className="control-icon">🖥️</span>
-                <span className="control-text">{isScreenSharing ? "Stop Share" : "Share Screen"}</span>
               </button>
 
               <button 
@@ -302,7 +515,6 @@ function InterviewRoom({ room, onLeave }) {
                 title="Set Reference Face"
               >
                 <span className="control-icon">👤</span>
-                <span className="control-text">Reference Face</span>
               </button>
             </div>
           </div>
@@ -310,19 +522,7 @@ function InterviewRoom({ room, onLeave }) {
 
         {/* Right Side - AI Results (25%) */}
         <div className="results-section">
-          {/* Status Cards */}
-          <div className="status-cards">
-            <div className={`status-card connection-${connectionStatus}`}>
-              <span className="status-label">Connection</span>
-              <span className="status-value">{connectionStatus.toUpperCase()}</span>
-            </div>
-            
-            <div className={`status-card interview-${interviewStatus}`}>
-              <span className="status-label">Interview</span>
-              <span className="status-value">{interviewStatus.toUpperCase()}</span>
-            </div>
-          </div>
-
+       
           {/* AI Detection Results Box */}
           <div className="results-container">
             <h3 className="results-title">AI Detection Results</h3>
